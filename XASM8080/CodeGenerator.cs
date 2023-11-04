@@ -15,8 +15,8 @@ public class CodeGenerator {
         get; set;
     }
 
-    public int? BufferAddressMinUsed;
-    public int? BufferAddressMaxUsed;
+    public ushort? BufferAddressMinUsed;
+    public ushort? BufferAddressMaxUsed;
     
 
     private static readonly Lazy<CodeGenerator> lazy =
@@ -28,7 +28,58 @@ public class CodeGenerator {
         CodeBuffer = new byte[65536];
     }
 
-    public void Reset(int Pass, int Address, bool FinalPass) => throw new NotImplementedException();
+    public void Reset(int Pass, int Address, bool FinalPass) {
+        MemoryAddress = null;
+        BufferAddressMinUsed = null;
+        BufferAddressMaxUsed = null;
+    }
+    internal void WriteByte(byte? data, List<byte> outputBytes) {
+        if (data == null) { 
+            return; 
+        }
+        if (outputBytes != null) {
+            outputBytes.Add(data.Value);
+        }
+        if (MemoryAddress == null) { 
+            return; 
+        }
+        if (MemoryAddress < (BufferAddressMinUsed ?? ushort.MaxValue)) {
+            BufferAddressMinUsed = MemoryAddress;
+        }
+        if (MemoryAddress > (BufferAddressMaxUsed ?? ushort.MinValue)) {
+            BufferAddressMaxUsed = MemoryAddress;
+        }
+        CodeBuffer[MemoryAddress.Value] = data.Value;
+        MemoryAddress++;
+    }
+    internal void WriteWord(ushort? data, List<byte> outputBytes) {
+        if (data == null) {
+            return;
+        }
+        WriteByte((byte)(data & 0xff), outputBytes);
+        WriteByte((byte)(data >> 8), outputBytes);
+    }
+    internal void WriteBytes(byte[]? data, List<byte> outputBytes) {
+        if (data == null) {
+            return;
+        }
+        foreach (var b in data) {
+            WriteByte(b, outputBytes);
+        }
+    }
+    internal void WriteWords(ushort[]? data, List<byte> outputBytes) {
+        if (data == null) {
+            return;
+        }
+        foreach (var w in data) {
+            WriteWord(w, outputBytes);
+        }
+    }
+
+    internal byte[] GetOutput() {
+        return CodeBuffer[(BufferAddressMinUsed ?? 0) .. (BufferAddressMaxUsed ?? 65536)];
+    }
+
 }
 
 

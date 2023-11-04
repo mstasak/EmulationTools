@@ -1,4 +1,4 @@
-﻿using System;
+﻿ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection.Emit;
@@ -21,8 +21,24 @@ public enum OperandModel {
     RstNum,
     DBList,
     DWList,
-    DSSize,
-    BlockName,
+    DSSize
+    //BlockName
+}
+
+public enum OperandKind {
+    None,
+    R8Left,
+    R8Right,
+    R16WithSP,
+    R16WithPSW,
+    R16OnlyBD, //BC or DE only
+    Imm8,
+    Imm16,
+    RstNum,
+    DBList,
+    DWList,
+    DSSize
+    //BlockName,
 }
 
 public class Operand {
@@ -30,7 +46,8 @@ public class Operand {
     //public bool IsResolved;
     public string Text;
     //public OperandModel OperandModel;
-    public byte[]? Bytes; //for variable length operands (db, dw)
+    public OperandKind Kind;
+    public List<byte>? Bytes; //for variable length operands (db, dw)
     public ushort? WordValue; //for all types except strings, e.g. DB "Hello, World!\n"
     public byte? OpcodeModifier;  //shifted and masked code, to be or'ed to opcode to insert a register, rp, or rst code
     public bool HasError;
@@ -41,8 +58,10 @@ public class Operand {
         //ErrorDescription = "";
     }
 
-    public Operand(bool isResolved, string text, byte[]? bytes, ushort? wordValue, byte? opcodeModifier, bool hasError, string? errorDescription) {
+    public Operand(/*OperandModel operandModel,*/ OperandKind operandKind, string text, List<byte>? bytes, ushort? wordValue, byte? opcodeModifier, bool hasError, string? errorDescription) {
         //IsResolved = isResolved;
+        //OperandModel = operandModel;
+        Kind = operandKind;
         Text = text;
         Bytes = bytes;
         WordValue = wordValue;

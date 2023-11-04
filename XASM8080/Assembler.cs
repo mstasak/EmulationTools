@@ -38,6 +38,8 @@ public class Assembler {
 
     public int Pass;
     public int PriorPassUnresolvedSymbolRefs;
+    public bool FinalPass;
+
     //private bool FinalPass = false;
     //private int passErrorCount = 0;
     //private int passUnresolvedSymbols = 0; //symbol value is uncertain; must reach 0 for successful compile
@@ -48,7 +50,7 @@ public class Assembler {
     public string? currentFileFullPathName;
     public int currentLineNumber; //within file
     public string? MostRecentNormalLineLabel; //for [label].locallabel symbols
-    private List<string> FullFilePaths = new();
+    private readonly List<string> FullFilePaths = new();
 
     ////private string currentLinePart; // label, opcode, operand n, comment
     ////private string? currentLineLabel;
@@ -67,6 +69,11 @@ public class Assembler {
         new(() => new Assembler());
 
     public static Assembler Instance => lazy.Value;
+
+    public bool EndEncountered {
+        get;
+        set;
+    }
 
     private Assembler() {
         InputFilePaths = XASMMain.InputFileNames;
@@ -97,25 +104,29 @@ public class Assembler {
         AssemblyStartTime = DateTime.Now;
         Pass = 1;
         PriorPassUnresolvedSymbolRefs = 0;
-        bool needAnotherPass;
+        FinalPass = false;
         //bool readyForFinalPass = false; //will be set when no issues remain, or last pass made no progress
         do {
-            CodeGenerator.Instance.Reset(Pass: Pass, Address: 0, FinalPass: false);
             AssemblePass();
             var passUnresolvedSymbolRefs = SymbolTable.Instance.SymbolValueUnresolvedCount();
             //int passUnknownSymbolCount = SymbolTable.UnknownSymbolCount();
-            needAnotherPass = (passUnresolvedSymbolRefs > 0) && (passUnresolvedSymbolRefs < PriorPassUnresolvedSymbolRefs);
+            if (Pass > 1) {
+                FinalPass = (passUnresolvedSymbolRefs == 0) || (passUnresolvedSymbolRefs >= PriorPassUnresolvedSymbolRefs);
+            }
             PriorPassUnresolvedSymbolRefs = passUnresolvedSymbolRefs;
             Pass++;
-        } while (needAnotherPass);
-        if (PriorPassUnresolvedSymbolRefs > 0) {
+        } while (!FinalPass);
+        if (false && PriorPassUnresolvedSymbolRefs > 0) {
             Pass--;
             DisplayMessage($"Assembly aborted after {Pass} passes.  There are {PriorPassUnresolvedSymbolRefs} unresolvable symbols.");
         } else {
             //begin final pass
-            CodeGenerator.Instance.Reset(Pass: Pass, Address: 0, FinalPass: true);
+            OutputGenerator.OutputStart();
+
             AssemblePass();
-            DisplayMessage($"Assembly completed in {Pass} passes.");
+            AssemblyEndTime = DateTime.Now;
+            DisplayMessage($"Assembly completed in {Pass} passes.  Elapsed time: {AssemblyElapsedTime.TotalSeconds} secs.");
+            OutputGenerator.OutputEnd();
             //CodeGenerator.DisplayOutputStatistics();
         }
     }
@@ -127,16 +138,26 @@ public class Assembler {
     private void AssemblePass() {
         //throw new NotImplementedException();
         //passErrorCount = 0;
+        CodeGenerator.Instance.Reset(Pass: Pass, Address: 0, FinalPass: FinalPass);
+        EndEncountered = false;
         foreach (var fileName in FullFilePaths) {
+            if (EndEncountered) {
+                break;
+            }
             var fi = new FileInfo(fileName);
             currentFileShortName = fi.Name;
+            currentFileFullPathName = fileName;
             currentLineNumber = 1;
             using var inFile = File.OpenText(fileName);
             if (inFile != null) {
                 var s = GetLineWithContinuations(inFile);
                 while (s != null) {
                     AssembleLine(s);
+                    if (EndEncountered) {
+                        break;
+                    }
                     s = GetLineWithContinuations(inFile);
+                    currentLineNumber++;
                 }
             }
         }
@@ -152,9 +173,9 @@ public class Assembler {
         return s;
     }
 
-    private static void AssembleLine(string s) {
-        var SourceLine = new SourceCodeLine(s);
-        SourceLine.Parse();
+    private void AssembleLine(string s) {
+        var SourceLine = new SourceCodeLine(s, currentFileFullPathName!, currentLineNumber);
+        SourceLine.Parse(FinalPass);
     }
 
 }

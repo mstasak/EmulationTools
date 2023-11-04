@@ -4,10 +4,12 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Diagnostics.Tracing;
 using System.Linq;
+using System.Numerics;
 using System.Reflection.Emit;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
+using System.Xml;
 using System.Xml.Linq;
 using Microsoft.Win32;
 using static System.Net.Mime.MediaTypeNames;
@@ -19,8 +21,11 @@ public partial class SourceCodeLine {
     /// </summary>
     public string Source;
     public int LinePosition;
+    public string SourceFileName;
+    public int SourceLineNumber;
     public int? ErrorPosition;
     public string? ErrorMessage;
+    public ushort? startAddr;
     /// <summary>
     /// Label defined at start of line:
     /// abc: instruction... - a "normal" symbol defined uniquely within this file and accessable from only this file
@@ -29,23 +34,27 @@ public partial class SourceCodeLine {
     /// .blockname.abc: ...    one "normal" label to the next, or a containing block/endblock pair
     /// 
     /// </summary>
-    public SymbolDefinition? Label;
+    public LabelDeclaration? Label;
     public InstructionDefinition? Instruction;
     public byte? Opcode;
     public List<Operand> Operands;
+    public List<byte> OutputBytes = new();
     //public string AssemblerDirective; //future? listing options, strict switch, pass limits, forward ref disallowed flag, etc.
+    // perhaps also import/link commands or standard include packages such as bios and cruntime-like libs or graphics output
     public string? Comment;
 
     //operand parse lookup tables:
-    internal static string[] regs8 = { "B", "C", "D", "E", "H", "L", "M", "A" };
-    internal static string[] regs16SP = { "B", "D", "H", "SP" };
-    internal static string[] regs16PSW = { "B", "D", "H", "PSW" };
-    internal static string[] regs16BD = { "B", "D" };
-    internal static string[] rstNums = { "0", "1", "2", "3", "4", "5", "6", "7" };
+    internal static string[] regs8 = { "^B", "^C", "^D", "^E", "^H", "^L", "^M", "^A" };
+    internal static string[] regs16SP = { "^B", "^D", "^H", "^SP" };
+    internal static string[] regs16PSW = { "^B", "^D", "^H", "^PSW" };
+    internal static string[] regs16BD = { "^B", "^D" };
+    internal static string[] rstNums = { "^0", "^1", "^2", "^3", "^4", "^5", "^6", "^7" };
 
-    //public SymbolTable SymbolTable = new();
-
-    public SourceCodeLine(string source) {
+    /// <summary>
+    /// Construct a source code line for parsing and code generation.
+    /// </summary>
+    /// <param name="source">The line of source code to assemble: [label] [operation [operand...]] [comment]</param>
+    public SourceCodeLine(string source, string fileName, int lineNumber) {
         Source = source;
         LinePosition = 0;
         Label = null;
@@ -53,14 +62,151 @@ public partial class SourceCodeLine {
         Opcode = null;
         Operands = new();
         Comment = null;
+        SourceFileName = fileName;
+        SourceLineNumber = lineNumber;
     }
-    public bool Parse() {
+    public bool Parse(bool finalPass) {
+        startAddr = CodeGenerator.Instance.MemoryAddress;
         ParseLabelDeclaration();
         ParseInstruction(); //includes operands
         ParseComment();
+        GenerateCode();
+        if (finalPass) {
+            OutputGenerator.OutputLine(this);
+        }
         return ErrorMessage != null;
     }
 
+    public bool GenerateCode() {
+        //if label, figure out value and add/update symbol table
+        //  special handling for org and equ
+
+        if (Label != null) {
+            var sym = SymbolTable.Instance.Lookup(Label);
+            ushort? newLabelValue = null; // = CodeGenerator.Instance.MemoryAddress;
+            if (Instruction != null && ((Instruction.Value.Mnemonic == "ORG") || (Instruction.Value.Mnemonic == "EQU"))) {
+                if (Operands.Count == 1 && Operands[0].WordValue.HasValue) {
+                    newLabelValue = Operands[0].WordValue;
+                    if (Instruction.Value.Mnemonic == "ORG") {
+                        CodeGenerator.Instance.MemoryAddress = newLabelValue;
+                        startAddr = newLabelValue;
+                    }
+                    if (sym != null) {
+                        sym.WordValue = newLabelValue;
+                    }
+                } else {
+                    ReportError("ORG and EQU require one resolved word operand.");
+                }
+            } else {
+                newLabelValue = CodeGenerator.Instance.MemoryAddress;
+            }
+            if (sym == null) {
+                sym = new SymbolDefinition() {
+                    DeclarationFileName = Label.FileName,
+                    DeclarationLineNumber = Label.LineNumber,
+                    Kind = Label.Kind switch {
+                        LabelDeclarationKind.None => SymbolKind.None,
+                        LabelDeclarationKind.Global => SymbolKind.Global,
+                        LabelDeclarationKind.Static => SymbolKind.Static,
+                        LabelDeclarationKind.Local => SymbolKind.Local,
+                        _ => SymbolKind.None
+                    },
+                    LabelText = Label.LabelText,
+                    ParentText = Label.ParentText,
+                    WordValue = newLabelValue
+                };
+                SymbolTable.Instance.SymbolTab[sym.SymbolTableKey()] = sym;
+            } else {
+                sym.WordValue = newLabelValue;
+            }
+
+        }
+
+        if (Instruction.HasValue && Instruction.Value.Mnemonic == "END") {
+            Assembler.Instance.EndEncountered = true; //breaks assembly pass file and line loops
+        }
+        if (!CodeGenerator.Instance.MemoryAddress.HasValue && Instruction.HasValue && Instruction.Value.Mnemonic != "ORG"&& Instruction.HasValue && Instruction.Value.Mnemonic != "EQU") {
+            return false; //current address undefined
+        }
+        //emit opcode and operands
+        //  before final pass, write nothing, just advance address pointer
+        if (Instruction.HasValue) {
+            var instr = Instruction.Value;
+            if (instr.IsPseudoOp == false) {
+                //handle opcode modifiers
+                var opc = instr.Opcode;
+                foreach (var oprmod in Operands) {
+                    opc = (byte)((opc ?? 0) | (oprmod.OpcodeModifier ?? 0));
+                }
+                CodeGenerator.Instance.WriteByte(opc, OutputBytes);
+                foreach (var oprval in Operands) {
+                    //switch (oprval.Kind) {
+                    //    case OperandKind.Imm8:
+                    //        CodeGenerator.Instance.WriteByte((byte)(oprval.WordValue ?? 0), OutputBytes);
+                    //        break;
+                    //    case OperandKind.Imm16:
+                    //        CodeGenerator.Instance.WriteWord(oprval.WordValue ?? 0, OutputBytes);
+                    //        break;
+                    //    default:
+                    //        break;
+                    //}
+                    if (oprval.Bytes != null) {
+                        CodeGenerator.Instance.WriteBytes(oprval.Bytes.ToArray(), OutputBytes);
+                    }
+                }
+                //write operand bytes where applicable
+            } 
+            if (Instruction.Value.Mnemonic == "DB") {
+                foreach (var oprval in Operands) {
+                    if (oprval.Kind == OperandKind.DBList) {
+                        CodeGenerator.Instance.WriteBytes(oprval.Bytes!.ToArray(), OutputBytes!);
+                    }
+                }
+            } else if (Instruction.Value.Mnemonic == "DW") {
+                foreach (var oprval in Operands) {
+                    if (oprval.Kind == OperandKind.DWList) {
+                        CodeGenerator.Instance.WriteBytes(oprval.Bytes!.ToArray(), OutputBytes!);
+                    }
+                }
+            } else if (Instruction.Value.Mnemonic == "DS") {
+                var oprDSSize = Operands[0];
+                if (CodeGenerator.Instance.MemoryAddress != null &&
+                    oprDSSize.WordValue != null) {
+                    CodeGenerator.Instance.MemoryAddress = (ushort)(CodeGenerator.Instance.MemoryAddress + oprDSSize.WordValue);
+                }
+            } else if (Instruction.Value.Mnemonic == "END") {
+                Assembler.Instance.EndEncountered = true; //breaks assembly pass file and line loops
+            } else if (Instruction != null && ((Instruction.Value.Mnemonic == "ORG") || (Instruction.Value.Mnemonic == "EQU"))) {
+                if (Operands.Count == 1 && Operands[0].WordValue.HasValue) {
+                    var newPCValue = Operands[0].WordValue;
+                    if (Instruction.Value.Mnemonic == "ORG") {
+                        CodeGenerator.Instance.MemoryAddress = newPCValue;
+                    }
+                } else {
+                    ReportError("ORG requires one resolved word operand.");
+                }
+            }        }
+        // write bin
+
+        return true;
+    }
+
+    private void ReportError(string v) {
+
+    }
+
+    public bool OutputListings() {
+        // write lst
+        // write err
+        // write sym
+        // write xrf?
+        // write prettyprint?
+        return true;
+    }
+
+    /// <summary>
+    /// Skip forward to next non-whitespace character (intended to skip spaces and tabs).
+    /// </summary>
     public void SkipSpace() {
         while (LinePosition < Source.Length) {
             if (char.IsWhiteSpace(Source[LinePosition])) {
@@ -71,9 +217,16 @@ public partial class SourceCodeLine {
         }
     }
 
+    /// <summary>
+    /// Try to skip a literal string, returning true if found.
+    /// If found, LinePosition is advanced past the target string.
+    /// </summary>
+    /// <param name="literal">Target string.</param>
+    /// <param name="ignoreCase">Iff true, case insensitive search used.</param>
+    /// <returns></returns>
     public bool SkipLiteral(string literal, bool ignoreCase) {
         if (LinePosition + literal.Length - 1 < Source.Length) {
-            if (string.Compare(literal, Source[LinePosition..(LinePosition + literal.Length - 1)], ignoreCase) == 0) {
+            if (string.Compare(literal, Source[LinePosition..(LinePosition + literal.Length)], ignoreCase) == 0) {
                 LinePosition += literal.Length;
                 return true;
             }
@@ -85,21 +238,10 @@ public partial class SourceCodeLine {
         SkipSpace();
 
         //parse and categorize a label
-        string wholeLabel;
-        string leftpart;
-        string rightpart;
-        LabelKind labelKind;
-        var labelSize = MatchRegExp("[0-9A-Za-z_$.]*:");
-        if (labelSize > 0) {
-            var LabelStr = Munch(labelSize - 1); // all but trailing colon
-            Munch(1);
-            Debug.Assert(LabelStr != null); //not sure why type is string?
-            ////construct a very raw symbol definition - nothing but a name
-            //Label = new() {
-            //    Name = LabelStr,
-            //    WordValue = CodeGenerator.Instance.MemoryAddress,
-            //    ResolvedInPass = Assembler.Instance.Pass
-            //};
+        var decl = new LabelDeclaration();
+        decl.ParseLabelDeclarationName(Source, ref LinePosition, SourceFileName, SourceLineNumber);
+        if (decl.Kind != LabelDeclarationKind.None) {
+            Label = decl;
         }
     }
 
@@ -108,11 +250,12 @@ public partial class SourceCodeLine {
     /// If matched, return length of match.
     /// LinePosition is not changed.
     /// </summary>
-    /// <param name="pattern"></param>
+    /// <param name="pattern">pattern to match</param>
+    /// <param name="options">options, such as RegexOptions.IgnoreCase</param>
     /// <returns></returns>
     public int MatchRegExp(string pattern, RegexOptions options = RegexOptions.IgnoreCase) {
-        Debug.Assert(pattern.StartsWith("^")); //only interrested in matches at position 0
-        var match = Regex.Match(Source[LinePosition..], pattern, options);
+        Debug.Assert(pattern.StartsWith("^")); //only interested in matches at position 0
+        var match = Regex.Match(Source[LinePosition..], pattern, options, matchTimeout: TimeSpan.FromMilliseconds(500));
         if (match != null) {
             return match.Length;
         }
@@ -120,28 +263,27 @@ public partial class SourceCodeLine {
     }
 
     /// <summary>
-    /// 
+    /// Take numCharacters characters from Source beginning at LinePosition; advance LinePosition
     /// </summary>
-    /// <param name="skipCharacters"></param>
+    /// <param name="numCharacters">Length of string to return and skip over</param>
     /// <returns></returns>
-    public string Munch(int skipCharacters) {
-        var rslt = Source[LinePosition..(LinePosition + skipCharacters - 1)];
-        LinePosition += skipCharacters;
+    public string Munch(int numCharacters) {
+        var rslt = Source[LinePosition..(LinePosition + numCharacters)];
+        LinePosition += numCharacters;
         return rslt ?? "";
     }
 
     /// <summary>
-    /// 
+    /// Parse an instruction (opcode) and its arguments (operands)
     /// </summary>
     public void ParseInstruction() {
-        SkipSpace();
-        ParseLabelDeclaration();
-        SkipSpace();
-        var opcodeLength = MatchRegExp("[A-Z]*");
+        var opcodeLength = MatchRegExp("^\\s*[A-Z]+");
         if (opcodeLength > 0) {
             //instruction found (maybe not valid)
-            var opcodeString = Source[LinePosition..(LinePosition + opcodeLength - 1)];
-            LinePosition += opcodeLength;
+            var opcodeString = Munch(opcodeLength);
+            //LinePosition += opcodeLength;
+            opcodeString = opcodeString.TrimStart();
+            opcodeLength = opcodeString.Length;
             var opcodeIx = InstructionSet8080.InstructionSet.ToList().FindIndex((instruction) => instruction.Mnemonic == opcodeString);
 
             if (opcodeIx > 0) {
@@ -198,30 +340,169 @@ public partial class SourceCodeLine {
                         break;
                     case OperandModel.DSSize:
                         Operands.Add(ParseOperandImmWord());
+                        Operands.Last().Kind = OperandKind.DSSize;
                         break;
                     case OperandModel.None:
                         break;
-                    //default:
-                    //    break;
+                    case OperandModel.R8Imm8:
+                        Operands.Add(ParseOperandReg8());
+                        SkipSpace();
+                        if (MatchString(",")) {
+                            Munch(1);
+                        }
+                        Operands.Add(ParseOperandImmByte());
+                        break;
+                    case OperandModel.R16WithSPImm16:
+                        Operands.Add(ParseOperandReg16WithSP());
+                        SkipSpace();
+                        if (MatchString(",")) {
+                            Munch(1);
+                        }
+                        Operands.Add(ParseOperandImmWord());
+                        break;
+                        //default:
+                        //    break;
                 }
             }
         }
     }
 
-    private Operand ParseOperandListDB() => throw new NotImplementedException();
-    private Operand ParseOperandListDW() => throw new NotImplementedException();
-    private Operand ParseOperandImmWord() => throw new NotImplementedException();
-    private Operand ParseOperandImmByte() => throw new NotImplementedException();
+    private Operand? ParseOperandListDB() {
+        var oldPos = LinePosition;
+        Operand? rslt = ParseOperandDBValue();
+        if (rslt != null && rslt.Kind != OperandKind.None && rslt.Bytes != null) {
+            do {
+                var sepCount = MatchRegExp("^\\s*,");
+                if (sepCount > 0) {
+                    Munch(sepCount); //skip past comma to next value
+                    Operand? oprNext = ParseOperandDBValue();
+                    if (oprNext != null && oprNext.Kind != OperandKind.None && oprNext.Bytes != null) {
+                        rslt.Bytes.AddRange(oprNext.Bytes);
+                        //} else {
+                        //just loop back and look for a comma and another value (e.g. 2 was missing:  1, , 3)    
+                    }
+                } else {
+                    break;
+                }
+            } while (true);
+            rslt.Text = Source[oldPos..LinePosition];
+            rslt.Kind = OperandKind.DBList;
+        }
+        return rslt;
+    }
+
+    private Operand? ParseOperandDBValue() {
+        //try imm8
+        var rslt = ParseOperandImmByte();
+        if (rslt == null || rslt.HasError) {
+            //try "string"
+            rslt = ParseOperandDBString();
+        }
+        return rslt;
+    }
+
+    private Operand? ParseOperandDBString() {
+        SkipSpace();
+        var mLength = MatchRegExp("^\\'(\\\\.|[^\\'])+\\'"); //TODO: consider unicode or hex char literals
+        if (mLength < 3) {
+            return null;
+        }
+        var match = Munch(mLength);
+        match = match[1 .. (match.Length-1)]; //remove laading and trailing quote
+        match = dequote(match);
+        var matchBytes = new List<byte>();
+        foreach (var ch in match) {
+            matchBytes.Add((byte)ch);
+        }
+        return new Operand(match) {
+            Kind = OperandKind.DBList,
+            Bytes = matchBytes,
+            WordValue = 0
+        };
+    }
+
+    private string dequote(string match) {
+        var rslt = "";
+        var ix = 0;
+        while (ix < match.Length) {
+            if (match[ix] == '\\' && ix < match.Length - 1) {
+                rslt += match[++ix];
+            } else {
+                rslt += match[ix];
+            }
+            ix++;
+        }
+        return rslt;
+    }
+
+    private Operand ParseOperandListDW() {
+        var oldPos = LinePosition;
+        Operand? rslt = ParseOperandImmWord();
+        if (rslt != null && rslt.Kind != OperandKind.None) {
+            rslt.Bytes ??= new List<byte>();
+            rslt.Bytes.Add((byte)((rslt.WordValue ?? 0) & 0xff));
+            rslt.Bytes.Add((byte)((rslt.WordValue ?? 0) >> 8));
+            do {
+                var sepCount = MatchRegExp("^\\s*,");
+                if (sepCount > 0) {
+                    Munch(sepCount); //skip past comma to next value
+                    Operand? oprNext = ParseOperandImmWord();
+                    if (oprNext != null && oprNext.Kind != OperandKind.None) {
+                        rslt.Bytes.Add((byte)((oprNext.WordValue ?? 0) & 0xff));
+                        rslt.Bytes.Add((byte)((oprNext.WordValue ?? 0) >> 8));
+                        //} else {
+                        //just loop back and look for a comma and another value (e.g. 2 was missing:  1, , 3)    
+                    }
+                } else {
+                    break;
+                }
+            } while (true);
+            rslt.Text = Source[oldPos..LinePosition];
+            rslt.Kind = OperandKind.DWList;
+        }
+        return rslt;
+    }
+
+    private Operand ParseOperandImmWord() {
+        var opr = ParseNumericExpression();
+        opr.Kind = OperandKind.Imm16;
+        if (!opr.HasError && opr.WordValue.HasValue) {
+            opr.Bytes = new() {
+                (byte)((opr.WordValue ?? 0) & 0xff),
+                (byte)((opr.WordValue ?? 0) >> 8)
+            };        
+        } else {
+            opr.Bytes = new() {
+                0, 0
+            };        
+        }
+        return opr;
+    }
+    private Operand ParseOperandImmByte() {
+        var opr = ParseNumericExpression();
+        opr.Kind = OperandKind.Imm8;
+        if (!opr.HasError && opr.WordValue.HasValue) {
+            opr.Bytes = new() {
+                (byte)(opr.WordValue ?? 0)
+            };        
+        } else {
+            opr.Bytes = new() {
+                0
+            };        
+        }
+        return opr;
+    }
     private Operand ParseOperandRst() => throw new NotImplementedException();
 
     /// <summary>
-    /// 
+    /// Parse comment.  Really this does nothing.  If ';' found, ignore rest of line, else return so rest of line will be ignored.
     /// </summary>
     public void ParseComment() {
         SkipSpace();
         var found = MatchString(";");
         if (found) {
-            Comment = Source[LinePosition..]; //rest of line, including ';'            
+            Comment = Source[LinePosition..]; //rest of line, including ';'
+            LinePosition = Source.Length - 1;
         }
     }
 
@@ -239,7 +520,8 @@ public partial class SourceCodeLine {
     }
 
     /// <summary>
-    /// 
+    /// Look for an string in array matching the next characters in Source.  If found, return string's index and
+    /// advance past it.
     /// </summary>
     /// <param name="LookupArray"></param>
     /// <param name="ParsedText"></param>
@@ -249,27 +531,36 @@ public partial class SourceCodeLine {
         var rv = 0;
         foreach (var reg in LookupArray) {
             var matchLength = MatchRegExp(reg + "");
-            if (matchLength >= 0) {
+            if (matchLength > 0) {
                 ParsedText = Munch(matchLength);
                 return rv;
             }
             rv++;
         }
+        ParsedText = "";
         return -1;
     }
 
+    /// <summary>
+    /// 
+    /// </summary>
+    /// <param name="isLeft"></param>
+    /// <returns></returns>
     public Operand ParseOperandReg8(bool isLeft = true) {
         var parsedText = "";
         var nWhich = ParseForLookupEntry(regs8, ref parsedText);
-        var rslt = new Operand(text: parsedText) {
-            //Name = "reg8",
-            //OperandModel = isLeft ? OperandModel.R8Left : OperandModel.R8Right,
-            Text = parsedText
-        };
+        var rslt = new Operand(//operandModel: isLeft ? OperandModel.R8Left : OperandModel.R8Right,
+            operandKind: isLeft ? OperandKind.R8Left : OperandKind.R8Right,
+            text: parsedText,
+            bytes: null,
+            wordValue: 0,
+            opcodeModifier: 0,
+            hasError: false,
+            errorDescription: null);
         if (nWhich >= 0) {
             //rslt.IsResolved = true;
             rslt.WordValue = (ushort)nWhich;
-            rslt.OpcodeModifier = (byte)((nWhich & 0x07) << 3);
+            rslt.OpcodeModifier = (byte)((nWhich & 0x07) << (isLeft ? 3 : 0));
         } else {
             rslt.HasError = true;
             rslt.ErrorDescription = "Unrecognized register name";
@@ -284,11 +575,14 @@ public partial class SourceCodeLine {
     public Operand ParseOperandReg16WithSP() {
         var parsedText = "";
         var nWhich = ParseForLookupEntry(regs16SP, ref parsedText);
-        var rslt = new Operand(text: parsedText) {
-            //IsResolved = true,
-            //Name = "regpair16(BC/DE/HL/SP)",
-            //OperandModel = OperandModel.R16WithSP,
-        };
+        var rslt = new Operand(//operandModel: OperandModel.R16WithSP,
+            operandKind: OperandKind.R16WithSP,
+            text: parsedText,
+            bytes: null,
+            wordValue: 0,
+            opcodeModifier: 0,
+            hasError: false,
+            errorDescription: null);
         if (nWhich >= 0) {
             rslt.WordValue = (ushort)nWhich; //this may be used in place of IsResolved to determine validity of operand value.
             rslt.OpcodeModifier = (byte)((nWhich & 0x03) << 4); //this is actual useful operand value, or'ed to opcode
@@ -305,11 +599,14 @@ public partial class SourceCodeLine {
     public Operand ParseOperandReg16WithPSW() {
         var parsedText = "";
         var nWhich = ParseForLookupEntry(regs16PSW, ref parsedText);
-        var rslt = new Operand(text: parsedText) {
-            //IsResolved = true,
-            //Name = "regpair16(BC/DE/HL/PSW)",
-            //OperandModel = OperandModel.R16WithPSW,
-        };
+        var rslt = new Operand(//operandModel: OperandModel.R16WithPSW,
+            operandKind: OperandKind.R16WithPSW,
+            text: parsedText,
+            bytes: null,
+            wordValue: 0,
+            opcodeModifier: 0,
+            hasError: false,
+            errorDescription: null);
         if (nWhich >= 0) {
             rslt.WordValue = (ushort)nWhich; //this may be used in place of IsResolved to determine validity of operand value.
             rslt.OpcodeModifier = (byte)((nWhich & 0x03) << 4);
@@ -326,11 +623,14 @@ public partial class SourceCodeLine {
     public Operand ParseOperandReg16OnlyBD() {
         var parsedText = "";
         var nWhich = ParseForLookupEntry(regs16BD, ref parsedText);
-        var rslt = new Operand(text: parsedText) {
-            //IsResolved = true,
-            //Name = "regpair16(BC/DE)",
-            //OperandModel = OperandModel.R16OnlyBD,
-        };
+        var rslt = new Operand(//operandModel: OperandModel.R16OnlyBD,
+            operandKind: OperandKind.R16OnlyBD,
+            text: parsedText,
+            bytes: null,
+            wordValue: 0,
+            opcodeModifier: 0,
+            hasError: false,
+            errorDescription: null);
         if (nWhich >= 0) {
             rslt.WordValue = (ushort)nWhich; //this may be used in place of IsResolved to determine validity of operand value.
             rslt.OpcodeModifier = (byte)((nWhich & 0x03) << 4);
@@ -379,7 +679,7 @@ public partial class SourceCodeLine {
                         leftTerm.HasError = true;
                     }
                 } else {
-                    leftTerm.Text += " " + oper.Operator + rightTerm.Text;
+                    leftTerm.Text += " " + oper.Operator + " " + rightTerm.Text;
                     if (!leftTerm.HasError && rightTerm.HasError) {
                         leftTerm.ErrorDescription = rightTerm.ErrorDescription;
                         leftTerm.HasError = true;
@@ -429,8 +729,20 @@ public partial class SourceCodeLine {
             return value;
         }
 
+        value = ParseChar();
+        if ((value != null) && !value.HasError) {
+            return value;
+        }
+
+        //$
+        if (MatchString("$(?![0-9a-z_)")) {
+            Munch(1);
+            value = new Operand(text: "$") { WordValue = CodeGenerator.Instance.MemoryAddress};
+            return value;
+        }
+
+
         //(expr)
-        SkipSpace();
         if (MatchString("(")) {
             Munch(1);
             value = ParseNumericExpression();
@@ -456,21 +768,25 @@ public partial class SourceCodeLine {
         }
 
         //expression error - generic
-        value = new Operand(text: "") {
-            HasError = true,
-            ErrorDescription = "Error evaluating an operand - valid value not found.",
-        };
+        value = new Operand(//operandModel: OperandModel.R16WithPSW,
+            operandKind: OperandKind.None,
+            text: "",
+            bytes: null,
+            wordValue: null,
+            opcodeModifier: 0,
+            hasError: true,
+            errorDescription: "Error evaluating an operand - valid value not found.");
         return value;
     }
 
 
     public Operand ParseDecimalNumber() {
-        //TODO: implement distinct version for byte-sized operands, range 0 to 255
-        var MatchLen = MatchRegExp("^[0-9]+^[H]");
+        //TO DO: implement distinct version for byte-sized operands, range 0 to 255
+        var MatchLen = MatchRegExp("^[0-9]+(?!h)"); // (?!H)");
         ushort rsltVal;
         if (MatchLen > 0) {
             var strDecimalNum = Munch(MatchLen);
-            if (ushort.TryParse(strDecimalNum, System.Globalization.NumberStyles.HexNumber, null, out rsltVal)) {
+            if (ushort.TryParse(strDecimalNum, System.Globalization.NumberStyles.Integer, null, out rsltVal)) {
                 //return result built on rsltVal
                 return new Operand(text: strDecimalNum) { WordValue = rsltVal };
             }
@@ -480,14 +796,14 @@ public partial class SourceCodeLine {
     }
 
     public Operand ParseHexadecimalNumber() {
-        //TODO: implement distinct version for byte-sized operands, range 0 to FF (255)
-        //TODO: implement alternative hex number syntaxes ($ffff, 0xff, &HFFA0)
-        var MatchLen = MatchRegExp("^[0-9][0-9ABCDEF]+H");
+        //TO DO: implement distinct version for byte-sized operands, range 0 to FF (255)
+        //TO DO: implement alternative hex number syntaxes ($ffff, 0xff, &HFFA0)
+        var MatchLen = MatchRegExp("^[0-9][0-9ABCDEF]*H");
         ushort rsltVal;
         if (MatchLen > 0) {
             var strHexadecimalNum = Munch(MatchLen);
 
-            if (ushort.TryParse(strHexadecimalNum[0..(strHexadecimalNum.Length - 1)], out rsltVal)) {
+            if (ushort.TryParse(strHexadecimalNum[0..(strHexadecimalNum.Length - 1)], System.Globalization.NumberStyles.AllowHexSpecifier, null, out rsltVal)) {
                 //return result built on rsltVal
                 return new Operand(text: strHexadecimalNum) { WordValue = rsltVal };
             }
@@ -496,148 +812,72 @@ public partial class SourceCodeLine {
         return new Operand(text: "") { HasError = true, ErrorDescription = "Did not find a valid number" };
     }
 
-    //public int MatchRegExp(string pattern, RegexOptions options = RegexOptions.IgnoreCase) {
-    //    Debug.Assert(pattern.StartsWith("^")); //only interested in matches at position 0
-    //    var matches = Regex.Matches(Source[LinePosition..], pattern, options);
-    //    if (match != null) {
-    //        return match.Length;
-    //    }
-    //    return 0;
-    //}
+    // need parseChar
+    public Operand? ParseChar() {
+        SkipSpace();
+        var mLength = MatchRegExp("^\\'((\\\\.)|[^\\'])\\'"); //TODO: consider unicode or hex char literals
+        var match = Munch(mLength);
+        if (match.Length < 1) {
+            return null;
+        }
+        match = match[1 .. (match.Length - 1)]; //remove leading and trailing quote
+        match = dequote(match);
+        var matchBytes = new List<byte>() {
+            (byte)match[0] 
+        };
+        return new Operand(match) {
+            Kind = OperandKind.Imm8,
+            Bytes = matchBytes,
+            WordValue = (byte)match[0]
+        };
+    }
+
+    public Operand? ParseString() {
+        SkipSpace();
+        var mLength = MatchRegExp("^\\'(\\\\.)|[^\\'])+\\'"); //TODO: consider unicode or hex char literals
+        var match = Munch(mLength);
+        match = match[1 .. (match.Length - 1)]; //remove leading and trailing quote
+        match = dequote(match);
+        var matchBytes = new List<byte>();
+        foreach (var ch in match) {
+            matchBytes.Add((byte)ch);
+        }
+        return new Operand(match) {
+            Kind = OperandKind.DBList,
+            Bytes = matchBytes,
+            WordValue = (byte)match[0]
+        };
+    }
+
 
     /// <summary>
     /// Parse a label operand value, as part of an operand expression (e.g. JMP label)
     /// </summary>
     /// <returns>An Operand object, with appropriate error properties as needed, or null if text does not match any valid label syntax.</returns>
     public Operand? ParseLabelRef() {
-        //symbol flavors declared:
-        // abc: instruction... - a "normal" symbol defined uniquely within this file and accessable from only this file
-        // $abc: instruction... - a global symbol which can be referenced from other files; unique to file
-        // .abc: instruction... - a "local" nonunique symbol local to a block which is either the span from 
-        // .blockname.abc: ...    one "normal" label to the next, or a containing block/endblock pair
-        //symbol flavors referenced
-        // abc - a "normal" symbol defined uniquely within this file and accessable from only this file
-        // $abc - a "global" symbol from any file processed
-        // $filename[.ext].abc - a "global" symbol from a specific file processed
-        // .abc - a non-unique "local" symbol defined after the most recent normal (filewide) symbol
-        // underthislabel.abc - a non-unique "local" symbol defined after the specified normal (filewide) symbol
-        // blockname.abc - a non-unique "local" .symbol defined within a 'BLOCK blockname / ENDBLOCK blockname' range (not implemented)
-        SkipSpace();
-        //int symbolLen;
-        Regex re;
-
-        //CASE: "normal label" - unique in file, invisible outside file
-        re = new("^[a-z_][a-z_0-9]*", RegexOptions.Singleline | RegexOptions.IgnoreCase, TimeSpan.FromSeconds(1));
-        var match = re.Match(Source, LinePosition);
-        if (match.Success) {
-            // "normal" label like abc_1
-            var mLen = match.Length;
-            var symbolName = Munch(mLen);
-            var sym = new SymbolDefinition() {
-                Name = symbolName,
-                SymbolType = SymbolType.AddressFile,
-                //WordValue = null,
-                //TextStringValue = null,
-                //bool? BooleanValue = null,
-                ReferenceCount = 1,
-                //DeclarationFileName = "",
-                //DeclarationLineNumber,
-                //ResolvedInPass
-            };
-            var checkedSymbol = SymbolTable.ProcessReference(sym); //add unresolved entry if not present; update ref count and get value, resolved status if found
-            //symbol.AddReference(CurrentSourceCodeLocation());
-            return new Operand(text: symbolName) {
-                //IsResolved = checkedSymbol.WordValue != null, 
-                WordValue = checkedSymbol.WordValue
-            };
+        var lRef = new LabelReference();
+        lRef.ParseLabelReferenceName(Source, ref LinePosition);
+        if (lRef.Kind == LabelReferenceKind.None) {
+            return null;
         }
-
-        //CASE: "global label" - unique per file, may be forward-referenced (unresolved until later pass, add filename and address later)
-        re = new("^\\$[a-z_][a-z_0-9]*[^\\.]", RegexOptions.Singleline | RegexOptions.IgnoreCase, TimeSpan.FromSeconds(1));
-        match = re.Match(Source, LinePosition);
-        if (match.Success) {
-            // "global" label like $abc_1
-            var mLen = match.Length;
-            _ = Munch(1);
-            var symbolName = Munch(mLen - 1);
-            var sym = new SymbolDefinition() {
-                Name = symbolName,
-                SymbolType = SymbolType.AddressGlobal,
-                //WordValue = null,
-                //TextStringValue = null,
-                //bool? BooleanValue = null,
-                ReferenceCount = 1,
-                DeclarationFileName = "",
-                //DeclarationLineNumber,
-                //ResolvedInPass
-            };
-            var checkedSymbol = SymbolTable.ProcessReference(sym); //add unresolved entry if not present; update ref count and get value, resolved status if found
-            //symbol.AddReference(CurrentSourceCodeLocation());
-            return new Operand(text: symbolName) {
-                //IsResolved = checkedSymbol.WordValue != null, 
-                WordValue = checkedSymbol.WordValue
-            };
+        if (lRef.Kind != LabelReferenceKind.Global) {
+            lRef.FileName = SourceFileName;
+        } else if (lRef.ParentText != null) {
+            lRef.FileName = lRef.ParentText; //locate long name?
         }
-
-        //CASE: "global filename.label" - unique per file, may be forward-referenced (unresolved until later pass, add filename and address later)
-        //should rethink this - file.ext.label is a little bit of an RE parse headache, and should probably allow any valid filename within ""s
-        //on second thought, should examine some modern assemblers for better approaches - NASM, Turbo-Asm, MASM, etc.
-        re = new("^\\$([a-z_][a-z_0-9]*)\\.([a-z_][a-z_0-9]*)", RegexOptions.Singleline | RegexOptions.IgnoreCase, TimeSpan.FromSeconds(1));
-        match = re.Match(Source, LinePosition);
-        if (match.Success) {
-            // "global" label like $filename.abc_1
-            var mLen = match.Length;
-            _ = Munch(1);
-            var symbolName = Munch(mLen - 1);
-            var sym = new SymbolDefinition() {
-                Name = symbolName,
-                SymbolType = SymbolType.AddressGlobal,
-                //WordValue = null,
-                //TextStringValue = null,
-                //bool? BooleanValue = null,
-                ReferenceCount = 1,
-                DeclarationFileName = "",
-                //DeclarationLineNumber,
-                //ResolvedInPass
-            };
-            var checkedSymbol = SymbolTable.ProcessReference(sym); //add unresolved entry if not present; update ref count and get value, resolved status if found
-            //symbol.AddReference(CurrentSourceCodeLocation());
-            return new Operand(text: symbolName) {
-                //IsResolved = checkedSymbol.WordValue != null, 
-                WordValue = checkedSymbol.WordValue
-            };
+        var symbol = SymbolTable.Instance.Lookup(lRef);
+        if (symbol == null) {
+            return null;
+        } else {
+            return new Operand( 
+                operandKind: OperandKind.Imm16,
+                text: lRef.FullLabelText ?? "",
+                bytes: null,
+                wordValue: symbol.WordValue,
+                opcodeModifier: 0,
+                hasError: false,
+                errorDescription: null
+            );
         }
-
-        //CASE: "local label" - non-unique per file, may be forward-referenced (unresolved until later or future pass, add address later)
-        re = new("^\\.[a-z_][a-z_0-9]*[^\\.]", RegexOptions.Singleline | RegexOptions.IgnoreCase, TimeSpan.FromSeconds(1));
-        match = re.Match(Source, LinePosition);
-        if (match.Success) {
-            // "local" label like .abc_1
-            var mLen = match.Length;
-            _ = Munch(1);
-            var symbolName = Munch(mLen - 1);
-            var sym = new SymbolDefinition() {
-                Name = Assembler.Instance.MostRecentNormalLineLabel,
-                LocalSubLabel = symbolName,
-                SymbolType = SymbolType.AddressLocal,
-                //WordValue = null,
-                //TextStringValue = null,
-                //bool? BooleanValue = null,
-                ReferenceCount = 1,
-                DeclarationFileName = Assembler.Instance.currentFileName,
-                //DeclarationLineNumber,
-                //ResolvedInPass
-            };
-            var checkedSymbol = SymbolTable.ProcessReference(sym); //add unresolved entry if not present; update ref count and get value, resolved status if found
-            //symbol.AddReference(CurrentSourceCodeLocation());
-            return new Operand(text: symbolName) {
-                //IsResolved = checkedSymbol.WordValue != null, 
-                WordValue = checkedSymbol.WordValue
-            };
-        }
-
-        //symbol not found (no appropriate character pattern)
-        //rslt = new Operand();
-        return null;
     }
 }

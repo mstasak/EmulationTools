@@ -2,7 +2,7 @@
   "profiles": {
     "XASM8080": {
       "commandName": "Project",
-      "commandLineArgs": "--help me"
+      "commandLineArgs": "-c -l scs1.asm"
     }
   }
 }

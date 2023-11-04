@@ -46,8 +46,7 @@ public class XASMMain {
             UsageNeeded = true;
         } else {
             var argIndex = -1;
-            while (argIndex < args.Count()) {
-                ++argIndex;
+            while (++argIndex < args.Count()) {
                 var arg = args[argIndex];
                 if (Regex.IsMatch(arg, "(^\\-h$)|(^\\-\\-help$)", RegexOptions.IgnoreCase)) {
                     HelpNeeded = true;

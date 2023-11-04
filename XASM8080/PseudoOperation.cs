@@ -6,4 +6,5 @@ using System.Threading.Tasks;
 
 namespace XASM8080;
 internal class PseudoOperation {
+    //future
 }

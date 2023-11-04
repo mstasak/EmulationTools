@@ -12,9 +12,9 @@ indent_style = space
 #Formatting - new line options
 
 #place else statements on a new line
-csharp_new_line_before_else = true
+csharp_new_line_before_else = false
 #require braces to be on a new line for lambdas, methods, control_blocks, types, properties, and accessors (also known as "Allman" style)
-csharp_new_line_before_open_brace = all
+csharp_new_line_before_open_brace = none
 
 #Formatting - organize using options
 
@@ -129,6 +129,16 @@ csharp_style_expression_bodied_operators = false:silent
 csharp_style_expression_bodied_indexers = true:silent
 csharp_style_expression_bodied_lambdas = true:silent
 csharp_style_expression_bodied_local_functions = false:silent
+csharp_style_prefer_method_group_conversion = true:silent
+csharp_style_prefer_top_level_statements = true:silent
+csharp_style_prefer_primary_constructors = true:suggestion
+csharp_style_throw_expression = true:suggestion
+csharp_style_prefer_null_check_over_type_check = true:suggestion
+csharp_style_prefer_local_over_anonymous_function = true:suggestion
+csharp_style_prefer_index_operator = true:suggestion
+csharp_style_prefer_range_operator = true:suggestion
+csharp_style_prefer_tuple_swap = true:suggestion
+csharp_style_prefer_utf8_string_literals = true:suggestion
 
 [*.{cs,vb}]
 dotnet_style_operator_placement_when_wrapping = beginning_of_line
@@ -200,3 +210,5 @@ dotnet_style_prefer_inferred_tuple_names = true:suggestion
 dotnet_style_prefer_inferred_anonymous_type_member_names = true:suggestion
 dotnet_style_prefer_compound_assignment = true:warning
 dotnet_style_prefer_simplified_interpolation = true:suggestion
+dotnet_style_namespace_match_folder = true:suggestion
+insert_final_newline = false

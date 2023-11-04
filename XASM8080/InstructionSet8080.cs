@@ -8,7 +8,7 @@ namespace XASM8080;
 internal static class InstructionSet8080 {
     private static readonly InstructionDefinition[] instructionSet = {
         new InstructionDefinition {Mnemonic = "NOP", Opcode = 0x00, OperandModel = OperandModel.None, IsPseudoOp = false},
-        new InstructionDefinition {Mnemonic = "LXI", Opcode = 0x01, OperandModel = OperandModel.R16WithSP, IsPseudoOp = false},
+        new InstructionDefinition {Mnemonic = "LXI", Opcode = 0x01, OperandModel = OperandModel.R16WithSPImm16, IsPseudoOp = false},
         new InstructionDefinition {Mnemonic = "STAX", Opcode = 0x02, OperandModel = OperandModel.R16OnlyBD, IsPseudoOp = false},
         new InstructionDefinition {Mnemonic = "INX", Opcode = 0x03, OperandModel = OperandModel.R16WithSP, IsPseudoOp = false},
         new InstructionDefinition {Mnemonic = "INR", Opcode = 0x04, OperandModel = OperandModel.R8Left, IsPseudoOp = false},
@@ -101,12 +101,13 @@ internal static class InstructionSet8080 {
         
         
         new InstructionDefinition {Mnemonic = "ORG", Opcode = null, OperandModel = OperandModel.Imm16, IsPseudoOp = true},
+        new InstructionDefinition {Mnemonic = "EQU", Opcode = null, OperandModel = OperandModel.Imm16, IsPseudoOp = true},
         new InstructionDefinition {Mnemonic = "DB", Opcode = null, OperandModel = OperandModel.DBList, IsPseudoOp = true},
         new InstructionDefinition {Mnemonic = "DW", Opcode = null, OperandModel = OperandModel.DWList, IsPseudoOp = true},
         new InstructionDefinition {Mnemonic = "DS", Opcode = null, OperandModel = OperandModel.DSSize, IsPseudoOp = true},
         new InstructionDefinition {Mnemonic = "END", Opcode = null, OperandModel = OperandModel.None, IsPseudoOp = true},
-        new InstructionDefinition {Mnemonic = "BLOCK", Opcode = null, OperandModel = OperandModel.BlockName, IsPseudoOp = true},
-        new InstructionDefinition {Mnemonic = "ENDBLOCK", Opcode = null, OperandModel = OperandModel.BlockName, IsPseudoOp = true},
+        //new InstructionDefinition {Mnemonic = "BLOCK", Opcode = null, OperandModel = OperandModel.BlockName, IsPseudoOp = true},
+        //new InstructionDefinition {Mnemonic = "ENDBLOCK", Opcode = null, OperandModel = OperandModel.BlockName, IsPseudoOp = true},
         //DB
         //DW
         //DS
