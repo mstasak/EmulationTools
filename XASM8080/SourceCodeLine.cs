@@ -66,6 +66,9 @@ public partial class SourceCodeLine {
         SourceLineNumber = lineNumber;
     }
     public bool Parse(bool finalPass) {
+        if (SourceLineNumber == 2306) {
+            Console.WriteLine("Here");
+        }
         startAddr = CodeGenerator.Instance.MemoryAddress;
         ParseLabelDeclaration();
         ParseInstruction(); //includes operands
@@ -92,6 +95,9 @@ public partial class SourceCodeLine {
                         startAddr = newLabelValue;
                     }
                     if (sym != null) {
+                        if (sym.WordValue.HasValue && !newLabelValue.HasValue) {
+                            Console.WriteLine($"Internal error? Replacing defined symbol value with null: {sym.LabelText} = NULL");
+                        }
                         sym.WordValue = newLabelValue;
                     }
                 } else {
@@ -464,6 +470,9 @@ public partial class SourceCodeLine {
     }
 
     private Operand ParseOperandImmWord() {
+        if (SourceLineNumber == 2306) {
+            Console.WriteLine("Here");
+        }
         var opr = ParseNumericExpression();
         opr.Kind = OperandKind.Imm16;
         if (!opr.HasError && opr.WordValue.HasValue) {
@@ -708,6 +717,9 @@ public partial class SourceCodeLine {
         //  a symbol
         //  (a parenthesized expression)
         //  prefix value (we'll tolerate unlimited prefixes like ---1)
+        if (SourceLineNumber == 2306) {
+            Console.WriteLine("Here");
+        }
         Operand? value;
         SkipSpace();
 
@@ -735,7 +747,8 @@ public partial class SourceCodeLine {
         }
 
         //$
-        if (MatchString("$(?![0-9a-z_)")) {
+        var mLen = MatchRegExp("^\\$(?![0-9a-z_])");
+        if (mLen == 1) {
             Munch(1);
             value = new Operand(text: "$") { WordValue = CodeGenerator.Instance.MemoryAddress};
             return value;
