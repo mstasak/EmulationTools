@@ -13,7 +13,7 @@ the assembler will convert into binary machine code.  These will typically have 
 suffix of '.asm'.
 
 Assembler source files will consist of zero or more assembly lines.  A line ending with a
-backslash will be joined with the next line. ('\' is the line continuation character)
+backslash will be joined with the next line. ('\\' is the line continuation character)
 
 An assembler source file may contain an END directive.  END is a pseudo-op to mark the end
 of source code.  And lines following an end directive will be ignored, through the end of
