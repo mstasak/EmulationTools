@@ -11,58 +11,38 @@ namespace XASM8080;
 
 /**
  * Multi-pass assembler, using "standard"-ish Microsoft/Intel syntax.
- * Not too pleased with the first cut, may scrap most and do over.
- * The details of a simple process do add up quickly.  Too big for a reasonable
- * single-file program, should probably make distinct classes for 
- * instruction set, output generator(s), expression evaluation, symbol table.
+ * See Dialect.md for special features and limitations.
 **/
 
 public class Assembler {
 
-    public static readonly char[] WhitespaceChars = new char[] { ' ', '\t' };
-    public SymbolTable SymbolTable = SymbolTable.Instance;
-    public CodeGenerator CodeGenerator = CodeGenerator.Instance;
-    public List<string> InputFilePaths;
-
-    public DateTime AssemblyStartTime
-    {
+    internal static readonly char[] WhitespaceChars = new char[] { ' ', '\t' };
+    private readonly SymbolTable SymbolTable = SymbolTable.Instance;
+    private readonly CodeGenerator CodeGenerator = CodeGenerator.Instance;
+    internal DateTime AssemblyStartTime {
         get;
         private set;
     }
-    public DateTime AssemblyEndTime
-    {
+    internal DateTime AssemblyEndTime {
         get;
         private set;
     }
-    public TimeSpan AssemblyElapsedTime => AssemblyEndTime - AssemblyStartTime;
-
-    public int Pass;
-    public int PriorPassUnresolvedSymbolRefs;
-    public bool FinalPass;
-
-    //private bool FinalPass = false;
-    //private int passErrorCount = 0;
-    //private int passUnresolvedSymbols = 0; //symbol value is uncertain; must reach 0 for successful compile
-    //private int passUndefinedSymbols = 0; //symbol not known; ok on pass 1 for forward reference
+    internal TimeSpan AssemblyElapsedTime => AssemblyEndTime - AssemblyStartTime;
+    internal int Pass;
+    internal int PriorPassUnresolvedSymbolRefs;
+    internal bool FinalPass;
+    internal int CurrentPassErrorCount = 0;
 
 
-    public string? currentFileShortName;
-    public string? currentFileFullPathName;
-    public int currentLineNumber; //within file
-    public string? MostRecentNormalLineLabel; //for [label].locallabel symbols
-    private readonly List<string> FullFilePaths = new();
+    //internal string? currentFileShortName;
+    internal string? currentFileFullPathName;
+    internal int currentLineNumber; //within file
+    internal string? MostRecentNormalLineLabel; //for [label].locallabel symbols
+    private static string FileErrorMsg;
+    internal readonly List<string> InputFullFilePaths = new();
 
-    ////private string currentLinePart; // label, opcode, operand n, comment
-    ////private string? currentLineLabel;
-    ////private ushort? currentLineLabelValue;
-    ////private string? currentLineInstruction;
-    ////private byte? currentLineData;
-    ////private string? currentLineOperandText;
-    ////private List<byte>? currentLineOperandData;
-    ////private string? currentLineComment;
     ////private string? currentLineError;
     //private SourceCodeLine? currentLine;
-    //private int passUnresolvedSymbolRefs;
 
 
     private static readonly Lazy<Assembler> lazy =
@@ -76,26 +56,27 @@ public class Assembler {
     }
 
     private Assembler() {
-        InputFilePaths = XASMMain.InputFileNames;
-        FullFilePaths = new();
-        foreach(var fPath in InputFilePaths)
-        {
+        InputFullFilePaths = XASMMain.InputFileNames;
+        InputFullFilePaths = new();
+        foreach (var fPath in InputFullFilePaths) {
             var fi = new FileInfo(fPath);
             if (fi.Exists && CanOpenText(fi)) {
-                FullFilePaths.Add(fi.FullName);
+                InputFullFilePaths.Add(fi.FullName);
             } else {
+                XASMMain.SessionError($"Error, could not find or open input file {fi.FullName} - {FileErrorMsg}.  Aborting.");
+                XASMMain.Abort();
             }
         }
     }
 
-    private static bool CanOpenText(FileInfo fi)
-    {
+    private static bool CanOpenText(FileInfo fi) {
         try {
             if (fi.Exists) {
                 fi.OpenText().Dispose();
                 return true;
             }
-        } catch {
+        } catch (Exception ex) {
+            FileErrorMsg = ex.Message;
         }
         return false;
     }
@@ -140,12 +121,12 @@ public class Assembler {
         //passErrorCount = 0;
         CodeGenerator.Instance.Reset(Pass: Pass, Address: 0, FinalPass: FinalPass);
         EndEncountered = false;
-        foreach (var fileName in FullFilePaths) {
+        foreach (var fileName in InputFullFilePaths) {
             if (EndEncountered) {
                 break;
             }
             var fi = new FileInfo(fileName);
-            currentFileShortName = fi.Name;
+            //currentFileShortName = fi.Name;
             currentFileFullPathName = fileName;
             currentLineNumber = 1;
             using var inFile = File.OpenText(fileName);

@@ -25,7 +25,7 @@ public class OutputGenerator {
     private static string? FileBaseName;
 
     internal static void OutputStart() {
-        FileBaseName = Assembler.Instance.InputFilePaths[0];
+        FileBaseName = Assembler.Instance.InputFullFilePaths[0];
         var fi = new FileInfo(FileBaseName);
         var fExt = fi.Extension;
         FileBaseName = FileBaseName[0 .. (FileBaseName.Length - fExt.Length)];

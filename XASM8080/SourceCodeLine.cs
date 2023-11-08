@@ -66,9 +66,6 @@ public partial class SourceCodeLine {
         SourceLineNumber = lineNumber;
     }
     public bool Parse(bool finalPass) {
-        if (SourceLineNumber == 2306) {
-            Console.WriteLine("Here");
-        }
         startAddr = CodeGenerator.Instance.MemoryAddress;
         ParseLabelDeclaration();
         ParseInstruction(); //includes operands
@@ -470,9 +467,6 @@ public partial class SourceCodeLine {
     }
 
     private Operand ParseOperandImmWord() {
-        if (SourceLineNumber == 2306) {
-            Console.WriteLine("Here");
-        }
         var opr = ParseNumericExpression();
         opr.Kind = OperandKind.Imm16;
         if (!opr.HasError && opr.WordValue.HasValue) {
@@ -717,9 +711,6 @@ public partial class SourceCodeLine {
         //  a symbol
         //  (a parenthesized expression)
         //  prefix value (we'll tolerate unlimited prefixes like ---1)
-        if (SourceLineNumber == 2306) {
-            Console.WriteLine("Here");
-        }
         Operand? value;
         SkipSpace();
 

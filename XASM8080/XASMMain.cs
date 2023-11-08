@@ -3,6 +3,7 @@ using System.CodeDom.Compiler;
 using System.Net.NetworkInformation;
 using System.Reflection;
 using System.Text.RegularExpressions;
+using System.Transactions;
 using Microsoft.VisualBasic;
 
 namespace XASM8080;
@@ -14,6 +15,7 @@ public class XASMMain {
     static bool GenerateCode = true;
     static bool GenerateListing = true;
     static int ErrorLimit = 10;
+    private static bool Aborted;
     public static readonly List<string> InputFileNames = new();
     static int Main(string[] args) {
 
@@ -34,9 +36,10 @@ public class XASMMain {
     }
 
     private static void AssembleFiles() {
-        //Assembler.CmdLineArgs = InputFileNames;
-        //var asm = new Assembler(inputFileNames);
-        Assembler.Instance.Assemble();
+        var assembler = Assembler.Instance;
+        if (!Aborted) { // i.e. due to unreadable or missing input file
+            assembler.Assemble();
+        }
     }
 
     private static void ParseArgs(string[] args) {
@@ -104,5 +107,21 @@ public class XASMMain {
             Usage: {exeName} [options] filename [,filename...]
             For more info, use {exeName} -h or {exeName} --help
         """);
+    }
+
+    /// <summary>
+    /// Abort job due to some critical error, such as input file(s) not found.
+    /// </summary>
+    internal static void Abort() {
+        Aborted = true;
+    }
+    
+    /// <summary>
+    /// A significant error occurred, abort assembly and display a message on stderr
+    /// </summary>
+    /// <param name="errorMsg">Message to display to stderr prior to exiting</param>
+    internal static void SessionError(string errorMsg) {
+        Console.Error.WriteLine(v);
+        Console.Error.WriteLine("Assembly aborted.");
     }
 }
