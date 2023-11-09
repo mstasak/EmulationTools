@@ -78,3 +78,23 @@ represents the program counter at the start of the instruction).
 
 Comments may contain any text.  Comments begin with a semicolon, and end at the end of
 the line.
+
+## Future Possibilities
+ - conditional compilation
+ - non-numeric symbols (boolean, string)
+ - namespaces
+ - libraries
+ - smart linking
+ - macros
+ - alternate instruction sets (Z80, 6502, 68000?)
+ - deploy-on-build (perhaps via script/batch file)
+ - implement new instructions (essentially library calls (perhaps via RST to make
+   them 2 byte instructions plus operands) to provide fuller 16 bit, 32 bit, and
+   floating point support
+ - implement new instructions to support long calls to a pageable memory region
+ - implement new instructions to support CDECL-ish subroutine calls with arguments
+   and return values
+ - (most likely as a separate project) create a run time library to provide useful
+   functionality like a heap manager, collections, sorting, string parsing and 
+   formatting, etc.  CRT-ish.  Study old BaseTwo Spontaneous Assembly lib (for X86)
+   for ideas.  Also see what CPM-80 offers for standard system calls.
