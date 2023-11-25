@@ -11,6 +11,7 @@ public enum OperandModel {
     None,
     R8Left,
     R8Right,
+    R8LeftAndRight,
     R16WithSP,
     R16WithPSW,
     R16OnlyBD, //BC or DE only

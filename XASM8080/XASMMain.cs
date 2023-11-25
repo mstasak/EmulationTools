@@ -121,7 +121,7 @@ public class XASMMain {
     /// </summary>
     /// <param name="errorMsg">Message to display to stderr prior to exiting</param>
     internal static void SessionError(string errorMsg) {
-        Console.Error.WriteLine(v);
+        Console.Error.WriteLine(errorMsg);
         Console.Error.WriteLine("Assembly aborted.");
     }
 }

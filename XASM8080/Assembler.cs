@@ -14,7 +14,8 @@ namespace XASM8080;
  * See Dialect.md for special features and limitations.
 **/
 
-public class Assembler {
+
+internal class Assembler {
 
     internal static readonly char[] WhitespaceChars = new char[] { ' ', '\t' };
     private readonly SymbolTable SymbolTable = SymbolTable.Instance;
@@ -27,16 +28,16 @@ public class Assembler {
         get;
         private set;
     }
-    internal TimeSpan AssemblyElapsedTime => AssemblyEndTime - AssemblyStartTime;
-    internal int Pass;
-    internal int PriorPassUnresolvedSymbolRefs;
-    internal bool FinalPass;
-    internal int CurrentPassErrorCount = 0;
+    private TimeSpan AssemblyElapsedTime => AssemblyEndTime - AssemblyStartTime;
+    private int Pass;
+    private int PriorPassUnresolvedSymbolRefs;
+    private bool FinalPass;
+    private int CurrentPassErrorCount = 0;
 
 
     //internal string? currentFileShortName;
-    internal string? currentFileFullPathName;
-    internal int currentLineNumber; //within file
+    private string? currentFileFullPathName;
+    private int currentLineNumber; //within file
     internal string? MostRecentNormalLineLabel; //for [label].locallabel symbols
     private static string FileErrorMsg;
     internal readonly List<string> InputFullFilePaths = new();
@@ -44,21 +45,29 @@ public class Assembler {
     ////private string? currentLineError;
     //private SourceCodeLine? currentLine;
 
-
+    /// <summary>
+    /// private getter to lazily construct instance
+    /// </summary>
     private static readonly Lazy<Assembler> lazy =
         new(() => new Assembler());
 
-    public static Assembler Instance => lazy.Value;
+    /// <summary>
+    /// public accessor to Instance singleton
+    /// </summary>
+    internal static Assembler Instance => lazy.Value;
 
-    public bool EndEncountered {
+    /// <summary>
+    /// Flag to interrupt assembly of a file as soon as END pseudo-op is encountered
+    /// </summary>
+    internal bool EndEncountered {
         get;
         set;
     }
 
     private Assembler() {
-        InputFullFilePaths = XASMMain.InputFileNames;
+        var relativeOrFullNames = XASMMain.InputFileNames;
         InputFullFilePaths = new();
-        foreach (var fPath in InputFullFilePaths) {
+        foreach (var fPath in relativeOrFullNames) {
             var fi = new FileInfo(fPath);
             if (fi.Exists && CanOpenText(fi)) {
                 InputFullFilePaths.Add(fi.FullName);
@@ -81,7 +90,7 @@ public class Assembler {
         return false;
     }
 
-    public void Assemble() {
+    internal void Assemble() {
         AssemblyStartTime = DateTime.Now;
         Pass = 1;
         PriorPassUnresolvedSymbolRefs = 0;
@@ -119,7 +128,7 @@ public class Assembler {
     private void AssemblePass() {
         //throw new NotImplementedException();
         //passErrorCount = 0;
-        CodeGenerator.Instance.Reset(Pass: Pass, Address: 0, FinalPass: FinalPass);
+        CodeGenerator.Instance.Reset(); // Pass: Pass, Address: 0, FinalPass: FinalPass);
         EndEncountered = false;
         foreach (var fileName in InputFullFilePaths) {
             if (EndEncountered) {

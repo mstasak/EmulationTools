@@ -80,6 +80,8 @@ Comments may contain any text.  Comments begin with a semicolon, and end at the 
 the line.
 
 ## Future Possibilities
+ - command line response files (to set options and specify input files)
+ - directives to control output formatting, error handling, case sensitivity, etc.
  - conditional compilation
  - non-numeric symbols (boolean, string)
  - namespaces
@@ -89,7 +91,7 @@ the line.
  - alternate instruction sets (Z80, 6502, 68000?)
  - deploy-on-build (perhaps via script/batch file)
  - implement new instructions (essentially library calls (perhaps via RST to make
-   them 2 byte instructions plus operands) to provide fuller 16 bit, 32 bit, and
+   them 2 byte instructions plus operands)) to provide fuller 16 bit, 32 bit, and
    floating point support
  - implement new instructions to support long calls to a pageable memory region
  - implement new instructions to support CDECL-ish subroutine calls with arguments

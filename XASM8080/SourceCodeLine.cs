@@ -138,6 +138,9 @@ public partial class SourceCodeLine {
             if (instr.IsPseudoOp == false) {
                 //handle opcode modifiers
                 var opc = instr.Opcode;
+                if (instr.Mnemonic == "MOV") {
+                    Debug.WriteLine("outputing a mov instruction");    
+                }
                 foreach (var oprmod in Operands) {
                     opc = (byte)((opc ?? 0) | (oprmod.OpcodeModifier ?? 0));
                 }
@@ -307,6 +310,9 @@ public partial class SourceCodeLine {
                         //if (!oper2.HasError && Opcode.HasValue) {
                         //    Opcode = (byte)(Opcode | oper2.OpcodeModifier);
                         //}
+                        break;
+                    case OperandModel.R8LeftAndRight:
+                        Operands.AddRange(ParseOperandsReg8Reg8());
                         break;
                     case OperandModel.Imm8:
                         Operands.Add(ParseOperandImmByte());
@@ -533,7 +539,7 @@ public partial class SourceCodeLine {
         SkipSpace();
         var rv = 0;
         foreach (var reg in LookupArray) {
-            var matchLength = MatchRegExp(reg + "");
+            var matchLength = MatchRegExp(reg); //nonmatching word ending?
             if (matchLength > 0) {
                 ParsedText = Munch(matchLength);
                 return rv;
@@ -570,6 +576,18 @@ public partial class SourceCodeLine {
         }
         return rslt;
     }
+
+    public List<Operand> ParseOperandsReg8Reg8() {
+        var rslt = new List<Operand>();
+        rslt.Add(ParseOperandReg8(isLeft: true));
+        SkipSpace();
+        if (MatchString(",")) {
+            Munch(1);
+        }
+        rslt.Add(ParseOperandReg8(isLeft: false));
+        return rslt;
+    }
+
 
     /// <summary>
     /// 
